@@ -30,7 +30,7 @@ library("lme4")     # for GLM
 ```{r Import metadata, message=FALSE}
 library("readstata13")
 df_m35 <- read.dta13("../../severity/data/m35/m35_metadata_n1016_2018march.dta")
-colnames(df_m35)
+#colnames(df_m35)
 dim(df_m35) 
 # Limit variables
 metadata_pam <- df_m35 %>% 
@@ -264,7 +264,7 @@ table(df_m35_ABCRSV$virus_cat4, df_m35_ABCRSV$RSV, useNA="ifany") # MANY RSV/RV 
     
 ## 2-2. Table 1 for m35
 ```{r Table 1 of m35, eval=TRUE, message=FALSE}
-    colnames(df_m35_ABCRSV)
+    #colnames(df_m35_ABCRSV)
     table1_tbl <- df_m35_ABCRSV %>% select (-c(chronic_cohort, intake_sex,  intake_insurance, intake_income, inpatient_intub, inpatient_cpap,
                                             bioD, freeD, dbp_ugml, HRV, RVonly, NoPathogens_NPA, RVA_NPAseq:RVC_NPAseq, genotype_RV_NPAseq,
                                             milk_ISAC:total_conc_ku_l_r))  # For Table 1, remove some variables
