@@ -1,0 +1,302 @@
+---
+title: "Rhinovirus subtypes with NPA microbiome in MARC-35"
+date: "`r Sys.Date()`"
+output: html_document
+---
+# Study design
+  **Samples**: MARC-35, acute/chronic cohort.
+  **Exposure**: RV subtypes (A, B, C) vs. solo RSV (reference).
+  **Outcome**: NPA microbiota (PAM clusters, top 10 genera etc)
+  **Analysis**: 
+  **Sensitivity analysis**: e.g., remove RSV-RV coinfection (but it'll lose the power)
+  **References**: Bashir et al. JACI 2018 (https://www.ncbi.nlm.nih.gov/pubmed/29111214)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+version
+```
+
+## Analysis
+## 1-1. Uploading the packages
+```{r Upload packages, message=FALSE}
+library("tidyverse")
+library("stringr")  # Work on string
+library("purrr")
+library("tableone")
+library("lme4")     # for GLM
+```
+
+## 1-2.  Importing m35 metadata
+```{r Import metadata, message=FALSE}
+library("readstata13")
+df_m35 <- read.dta13("../../severity/data/m35/m35_metadata_n1016_2018march.dta")
+colnames(df_m35)
+dim(df_m35) 
+# Limit variables
+metadata_pam <- df_m35 %>% 
+                  select(-c(acute_cohort, enrolled_subj, site_region:site_region_lat,
+                            collection_season_NPA, breastmilk_mostly_6mo:mo12_solidfood,
+                            intake_overnight_hosp, intake_antibiotics_length,
+                            index_bp_woari, mata_ppi, intake_adultsinhome, mo30_cat_0to1:mo30_farmanimal_0to1,
+                            intch_retractions, intch_oralintake:intch_hypertonic_saline,
+                            inpatient_hfo:inpatient_hel, SampleID_NPA,
+                            Adenovirus:hMPV, myco_pneumoniae:RSVB, pathogen_sum,
+                            RnaseP:RSVB_CT, hMPV_CT:myco_pneumoniae_CT,
+                            alb_gdl,
+                            HeirarchicalWard4:HeirarchicalAvg5)) %>%  # remove unnecessary variables
+                  arrange(., by=study_id)
+# Rename HRV --> RV
+metadata_pam$RV  <- as.factor(metadata_pam$HRV)   
+  table(metadata_pam$RV, useNA="ifany"); class(metadata_pam$HRV)  # 214 RV by PCR
+```
+
+
+## 1-3. Recoding the metadata variables of m35
+```{r Re-code metadata of m35, message=FALSE}
+# Covariates    
+    # Age
+        metadata_pam$Agecat2 <-NA
+        metadata_pam$Agecat2[metadata_pam$Age_mo>=0 & metadata_pam$Age_mo <6] <- 1
+        metadata_pam$Agecat2[metadata_pam$Age_mo>=6] <- 2
+            metadata_pam$Agecat2 <- as.factor(metadata_pam$Agecat2)
+            table(metadata_pam$Agecat2, useNA="ifany"); class(metadata_pam$Agecat2)   
+        metadata_pam$Agecat3 <-NA
+        metadata_pam$Agecat3[metadata_pam$Age_mo>=0 & metadata_pam$Age_mo <2] <- 1
+        metadata_pam$Agecat3[metadata_pam$Age_mo>=2 & metadata_pam$Age_mo <6] <- 2
+        metadata_pam$Agecat3[metadata_pam$Age_mo>=6] <- 3
+            metadata_pam$Agecat3 <- as.factor(metadata_pam$Agecat3)
+            table(metadata_pam$Agecat3, useNA="ifany"); class(metadata_pam$Agecat3)           
+    # Sex  
+        metadata_pam$female = metadata_pam$intake_sex
+            table(metadata_pam$female, useNA="ifany"); class(metadata_pam$female)  
+                
+    # Race/ethnicity
+        metadata_pam$raceethn <- as.factor(metadata_pam$raceethn)
+            table(metadata_pam$raceethn, useNA="ifany"); class(metadata_pam$raceethn)  
+    # Parental asthma (missing n=1)
+        metadata_pam$parent_asthma = factor(metadata_pam$parent_asthma)
+            table(metadata_pam$parent_asthma, useNA="ifany"); class(metadata_pam$parent_asthma)  
+    # Maternal smoke  (missing n=1)
+        metadata_pam$mata_smoke = factor(metadata_pam$mata_smoke)
+            table(metadata_pam$mata_smoke, useNA="ifany"); class(metadata_pam$mata_smoke)          
+    # Fall birth (Sep, Oct, Nov) -- https://www.ncbi.nlm.nih.gov/pubmed/18776151
+        metadata_pam$birth_season <- factor(metadata_pam$birth_season)
+            table(metadata_pam$birth_season, useNA="ifany"); class(metadata_pam$birth_season) 
+        metadata_pam$fall_birth <- ifelse(metadata_pam$birth_season==3, TRUE, FALSE)
+            table(metadata_pam$fall_birth, useNA="ifany"); class(metadata_pam$fall_birth)
+    # Prematurity
+        metadata_pam$premature37 <- factor(metadata_pam$premature37)
+            table(metadata_pam$premature37, useNA="ifany"); class(metadata_pam$premature37)
+    # Birth mode (1 missing)
+        metadata_pam$mata_delivery <- factor(metadata_pam$mata_delivery)
+            table(metadata_pam$mata_delivery, useNA="ifany"); class(metadata_pam$mata_delivery)
+    # low birth wt  < 5 lb
+        metadata_pam$intake_child_weight_born <- as.numeric(metadata_pam$intake_child_weight_born)
+            table(metadata_pam$intake_child_weight_born, useNA="ifany");    class(metadata_pam$intake_child_weight_born)    
+        metadata_pam$low_birth_wt <-NA
+        metadata_pam$low_birth_wt[metadata_pam$intake_child_weight_born==1] <-TRUE
+        metadata_pam$low_birth_wt[metadata_pam$intake_child_weight_born==2] <-TRUE
+        metadata_pam$low_birth_wt[metadata_pam$intake_child_weight_born==3] <-FALSE
+        metadata_pam$low_birth_wt[metadata_pam$intake_child_weight_born==4] <-FALSE    
+            table(metadata_pam$low_birth_wt, useNA="ifany"); class(metadata_pam$low_birth_wt)
+    # Previous breathing
+        metadata_pam$prev_breathingprob2 <-NA
+        metadata_pam$prev_breathingprob2[metadata_pam$prev_breathingprob==0] <-FALSE
+        metadata_pam$prev_breathingprob2[metadata_pam$prev_breathingprob==1] <-TRUE
+        metadata_pam$prev_breathingprob2[metadata_pam$prev_breathingprob==2] <-TRUE
+            table(metadata_pam$prev_breathingprob2, useNA="ifany"); class(metadata_pam$prev_breathingprob2) 
+    # H/o eczema 
+        metadata_pam$intake_eczema_history <- factor(metadata_pam$intake_eczema_history)
+            table(metadata_pam$intake_eczema_history, useNA="ifany"); class(metadata_pam$intake_eczema_history)   
+    #Post-natal smoking exposure
+        metadata_pam$intake_smoke <- factor(metadata_pam$intake_smoke)    
+            table(metadata_pam$intake_smoke, useNA="ifany"); class(metadata_pam$intake_smoke) 
+    # Siblings
+        metadata_pam$children_home2 <-NA
+        metadata_pam$children_home2[metadata_pam$numb_children_home==0] <-FALSE
+        metadata_pam$children_home2[metadata_pam$numb_children_home!=0] <-TRUE
+            table(metadata_pam$children_home2, useNA="ifany"); class(metadata_pam$children_home2)           
+            
+    # breastmilk_mostly_3mo (10 missing)
+        metadata_pam$breastmilk_mostly_3mo <- factor(metadata_pam$breastmilk_mostly_3mo)    
+            table(metadata_pam$breastmilk_mostly_3mo, useNA="ifany"); class(metadata_pam$breastmilk_mostly_3mo)            
+            
+        metadata_pam$breastmilk_mostly_3mo9 <-NA
+        metadata_pam$breastmilk_mostly_3mo9[metadata_pam$breastmilk_mostly_3mo==0] <-0
+        metadata_pam$breastmilk_mostly_3mo9[metadata_pam$breastmilk_mostly_3mo==1] <-1
+        metadata_pam$breastmilk_mostly_3mo9[is.na(metadata_pam$breastmilk_mostly_3mo)]<-9        
+            metadata_pam$breastmilk_mostly_3mo9 <- as.factor(metadata_pam$breastmilk_mostly_3mo9)
+            table(metadata_pam$breastmilk_mostly_3mo9, useNA="ifany"); class(metadata_pam$breastmilk_mostly_3mo9) 
+          
+    # Corticosteroid use before the index hospitalization
+        metadata_pam$corticosteroids_life <- as.factor(metadata_pam$corticosteroids_life)   
+            table(metadata_pam$corticosteroids_life, useNA="ifany"); class(metadata_pam$corticosteroids_life)          
+    # Corticosteroid use during the pre-hospitalization visit
+        metadata_pam$corticosteroids_pre <- as.factor(metadata_pam$corticosteroids_pre)   
+            table(metadata_pam$corticosteroids_pre, useNA="ifany"); class(metadata_pam$corticosteroids_pre)         
+            
+    # Wt at presentation
+                    summary(metadata_pam$intch_weight)
+        metadata_pam$intch_weight_cat2 = 
+                    ifelse(metadata_pam$intch_weight<5.95,  "Low",
+                    ifelse(metadata_pam$intch_weight>=5.95, "High",
+                    NA))
+            metadata_pam$intch_weight_cat2 <- as.factor(metadata_pam$intch_weight_cat2)
+            table(metadata_pam$intch_weight_cat2, useNA="ifany"); class(metadata_pam$intch_weight_cat2)
+          
+    # sIgE (food or aero)
+        metadata_pam$IgE_any_food <- as.factor(metadata_pam$IgE_any_food)   
+            table(metadata_pam$IgE_any_food, useNA="ifany"); class(metadata_pam$IgE_any_food)  
+        metadata_pam$aeroallergens_atopy <- as.factor(metadata_pam$aeroallergens_atopy)   
+            table(metadata_pam$aeroallergens_atopy, useNA="ifany"); class(metadata_pam$aeroallergens_atopy)  
+        metadata_pam$IgE_cat2 <- ifelse(metadata_pam$IgE_any_food==1 | metadata_pam$aeroallergens_atopy==1, TRUE,
+                                    FALSE)
+            table(metadata_pam$IgE_cat2, useNA="ifany"); class(metadata_pam$IgE_cat2) 
+     
+    # O2 sat (3 missing)
+        metadata_pam$o2sat_initial <- as.factor(metadata_pam$o2sat_initial)   
+            table(metadata_pam$o2sat_initial, useNA="ifany"); class(metadata_pam$o2sat_initial)  
+    # Severity
+        metadata_pam$CPAPintubate <- as.factor(metadata_pam$CPAPintubate)   
+            table(metadata_pam$CPAPintubate, useNA="ifany"); class(metadata_pam$CPAPintubate)   
+        metadata_pam$inpatient_location___3 <- as.factor(metadata_pam$inpatient_location___3)   
+            table(metadata_pam$inpatient_location___3, useNA="ifany"); class(metadata_pam$inpatient_location___3)   
+        metadata_pam$IntensiveTreatment <- as.factor(metadata_pam$IntensiveTreatment)   
+            table(metadata_pam$IntensiveTreatment, useNA="ifany"); class(metadata_pam$IntensiveTreatment) 
+        metadata_pam$LOS_dys <- as.integer(metadata_pam$LOS_dys)   
+            summary(metadata_pam$LOS_dys, useNA="ifany"); class(metadata_pam$LOS_dys)      
+        metadata_pam$LOS3dys <- as.factor(metadata_pam$LOS3dys)   
+            table(metadata_pam$LOS3dys, useNA="ifany"); class(metadata_pam$LOS3dys)   
+        
+    # eos_4perc  (16 missing)
+        metadata_pam$eos_4perc <- as.factor(metadata_pam$eos_4perc)   
+            table(metadata_pam$eos_4perc, useNA="ifany"); class(metadata_pam$eos_4perc)          
+    # Microbiota clusters (PAM 4)
+        metadata_pam$PAM4 = 
+                    ifelse(metadata_pam$PAM4==1, "Moraxella dominant",
+                    ifelse(metadata_pam$PAM4==2, "Haemophilus dominant",
+                    ifelse(metadata_pam$PAM4==3, "Mixed",
+                    ifelse(metadata_pam$PAM4==4, "Streptococcus dominant",
+                    NA))))
+          table(metadata_pam$PAM4, useNA="ifany")         
+    # site
+        metadata_pam$site <- factor(metadata_pam$site)
+            table(metadata_pam$site, useNA="ifany"); class(metadata_pam$site)  
+    # Rec wheezing
+          metadata_pam$recurrent_wheeze_sleep_36mo_cat <- factor(metadata_pam$recurrent_wheeze_sleep_36mo)
+            table(metadata_pam$recurrent_wheeze_sleep_36mo_cat, useNA="ifany"); class(metadata_pam$recurrent_wheeze_sleep_36mo_cat)                    
+          #metadata_pam$recurrent_wheeze_36mo_cat <- factor(metadata_pam$recurrent_wheeze_36mo)
+          #  table(metadata_pam$recurrent_wheeze_36mo_cat, useNA="ifany"); class(metadata_pam$recurrent_wheeze_36mo_cat)
+          #metadata_pam$ICSuse_36mo_cat <- factor(metadata_pam$ICSuse_36mo)
+          #  table(metadata_pam$ICSuse_36mo_cat, useNA="ifany"); class(metadata_pam$ICSuse_36mo_cat)   
+
+            
+    # Virology        
+        metadata_pam$RSVonly <- as.factor(metadata_pam$RSVonly)   
+            table(metadata_pam$RSVonly, useNA="ifany"); class(metadata_pam$RSVonly)   
+        metadata_pam$RVonly<- as.factor(metadata_pam$RVonly)   
+            table(metadata_pam$RVonly, useNA="ifany"); class(metadata_pam$RVonly)         
+
+        #metadata_pam$RSVA <- as.factor(metadata_pam$RSVA)   
+        #    table(metadata_pam$RSVA, useNA="ifany"); class(metadata_pam$RSVA)  
+        #metadata_pam$RSVB <- as.factor(metadata_pam$RSVB)   
+        #    table(metadata_pam$RSVB, useNA="ifany"); class(metadata_pam$RSVB)
+        metadata_pam$RSV <- as.factor(metadata_pam$RSV)   
+            table(metadata_pam$RSV, useNA="ifany"); class(metadata_pam$RSV) 
+            
+        metadata_pam$RV  <- as.factor(metadata_pam$HRV)   
+            table(metadata_pam$RV, useNA="ifany"); class(metadata_pam$HRV)  
+        metadata_pam$OTHERvirus <-NA
+            metadata_pam$OTHERvirus[metadata_pam$RSV==1 | metadata_pam$RV==1] <-FALSE    
+            metadata_pam$OTHERvirus[metadata_pam$RSV !=1 & metadata_pam$RV !=1] <-TRUE
+            table(metadata_pam$OTHERvirus, useNA="ifany"); class(metadata_pam$OTHERvirus)             
+```
+
+## 1-3 RV count in m35
+```{r RV count in m35}
+# RV subtypes
+  table(metadata_pam$RVA_NPAseq, useNA="ifany") # n=97
+  table(metadata_pam$RVB_NPAseq, useNA="ifany") # n=15
+  table(metadata_pam$RVC_NPAseq, useNA="ifany") # n=99
+  table(metadata_pam$RVA_NPAseq, metadata_pam$RVB_NPAseq, useNA="ifany") # A+B, n=1
+  table(metadata_pam$RVA_NPAseq, metadata_pam$RVC_NPAseq, useNA="ifany") # A+C, n=4
+  table(metadata_pam$RVB_NPAseq, metadata_pam$RVC_NPAseq, useNA="ifany") # B+C, n=2
+
+# Create RV sutbype variable
+  metadata_pam$RVsubtype <- "Neither ABC"
+  metadata_pam$RVsubtype[metadata_pam$RVA_NPAseq==1 & metadata_pam$RVB_NPAseq==0 & metadata_pam$RVC_NPAseq==0] <-"Sole RVA"
+  metadata_pam$RVsubtype[metadata_pam$RVA_NPAseq==0 & metadata_pam$RVB_NPAseq==1 & metadata_pam$RVC_NPAseq==0] <-"Sole RVB"
+  metadata_pam$RVsubtype[metadata_pam$RVA_NPAseq==0 & metadata_pam$RVB_NPAseq==0 & metadata_pam$RVC_NPAseq==1] <-"Sole RVC"
+  metadata_pam$RVsubtype[metadata_pam$RVA_NPAseq==1 & metadata_pam$RVB_NPAseq==1 & metadata_pam$RVC_NPAseq==0] <-"Coinfection"
+  metadata_pam$RVsubtype[metadata_pam$RVA_NPAseq==0 & metadata_pam$RVB_NPAseq==1 & metadata_pam$RVC_NPAseq==1] <-"Coinfection"
+  metadata_pam$RVsubtype[metadata_pam$RVA_NPAseq==1 & metadata_pam$RVB_NPAseq==0 & metadata_pam$RVC_NPAseq==1] <-"Coinfection"
+  metadata_pam$RVsubtype[metadata_pam$RVA_NPAseq==1 & metadata_pam$RVB_NPAseq==1 & metadata_pam$RVC_NPAseq==1] <-"Coinfection"
+    metadata_pam$RVsubtype <- as.factor(metadata_pam$RVsubtype)
+    table(metadata_pam$RVsubtype , useNA="ifany")
+```
+
+## 1-4 Create subpopultions for m35
+```{r Create subpopulations for m35}
+# Limit to RVA, RVB, RVC, and RSV-only, with PAM (microbiota data) -- multiple RV species (n=7 excluded)
+  df_m35_ABCRSV <- metadata_pam %>% 
+                    filter(RVsubtype=="Sole RVA" | RVsubtype=="Sole RVB" | RVsubtype=="Sole RVC" | RSVonly==1) %>%
+                    filter(!is.na(PAM4))
+  table(df_m35_ABCRSV$RVsubtype, useNA="ifany")
+  nrow(df_m35_ABCRSV)
+
+# New variables for the 4 virus categories
+  df_m35_ABCRSV$virus_cat4 <- "RSV-only"
+  df_m35_ABCRSV$virus_cat4[df_m35_ABCRSV$RVsubtype=="Sole RVA"] <-"Sole RVA"
+  df_m35_ABCRSV$virus_cat4[df_m35_ABCRSV$RVsubtype=="Sole RVB"] <-"Sole RVB"
+  df_m35_ABCRSV$virus_cat4[df_m35_ABCRSV$RVsubtype=="Sole RVC"] <-"Sole RVC"
+    df_m35_ABCRSV$virus_cat4 <- as.factor(df_m35_ABCRSV$virus_cat4)
+    table(df_m35_ABCRSV$virus_cat4, useNA="ifany")
+```
+
+## 2-1. Descriptive (overall)
+```{r Overall characteristics of m35}
+summary(df_m35_ABCRSV$Age_mo)
+table(df_m35_ABCRSV$female)
+table(df_m35_ABCRSV$raceethn)
+table(df_m35_ABCRSV$RSV, df_m35_ABCRSV$virus_cat4)
+table(df_m35_ABCRSV$virus_cat4, df_m35_ABCRSV$RSV, useNA="ifany") # MANY RSV/RV CO-INFECTION
+```
+    
+## 2-2. Table 1 for m35
+```{r Table 1 of m35, eval=TRUE, message=FALSE}
+    colnames(df_m35_ABCRSV)
+    table1_tbl <- df_m35_ABCRSV %>% select (-c(chronic_cohort, intake_sex,  intake_insurance, intake_income, inpatient_intub, inpatient_cpap,
+                                            bioD, freeD, dbp_ugml, HRV, RVonly, NoPathogens_NPA, RVA_NPAseq:RVC_NPAseq, genotype_RV_NPAseq,
+                                            milk_ISAC:total_conc_ku_l_r))  # For Table 1, remove some variables
+    vars <- names(table1_tbl)[-1]
+    table_1<-CreateTableOne(vars = vars, strata = c("virus_cat4"), 
+                           data=table1_tbl,
+                           factorVars = c("female", "raceethn", 
+                                         "parent_asthma", "parent_eczema" , "mata_smoke",
+                                         "admit_month", "admit_year",
+                                         "premature37","intake_child_weight_born", "mata_delivery",
+                                         "prev_breathingprob2", "intake_eczema_history",
+                                         "intake_smoke", "intake_daycare", "children_home2","breastmilk_mostly_3mo",
+                                         "corticosteroids_life", "corticosteroids_pre",
+                                         "IgE_cat2", "IgE_any_food", "aeroallergens_atopy","eos_4perc",
+                                         "RSVonly", "RVonly", "OTHERvirus",
+                                         "RSV", "RV", "RVsubtype",
+                                          "PAM4", 
+                                         "o2sat_initial", 
+                                         "CPAPintubate", "inpatient_location___3","IntensiveTreatment", "LOS3dys",
+                                          "recurrent_wheeze_sleep_36mo"
+                                         ),
+                           includeNA = TRUE)  # if TRUE, NA as a category (ie, no exclusion)
+          print(table_1, nonnormal = c("Age_mo", "intch_weight","LOS_dys",
+                                      "intch_respiratory_rate", "Shannon", "Simpson", "ObservedOTUs",
+                                      "RANTES_pgml","LL37_ngml", "vitd25_ngml",  "LL37_ngml",
+                                      "HRV_CT",
+                                      "RWsleep_time2event_36mo" ),
+                            exact = c("intake_icu_born", "mata_antibiotics_labor", "mata_antibiotics_b4labor",
+                                      "intake_rsvshot"), 
+                            smd = FALSE,
+                            quote=TRUE, noSpaces = TRUE,
+                            max.print=TRUE)         
+```                     
+ 
+ 
