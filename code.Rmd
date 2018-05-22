@@ -300,3 +300,7 @@ table(df_m35_ABCRSV$virus_cat4, df_m35_ABCRSV$RSV, useNA="ifany") # MANY RSV/RV 
 ```                     
  
  
+ ## For genus-level analysis (e.g., box-plot) by RV subtype, let's consider to use **violin plot**: 
+ https://www.r-graph-gallery.com/violin-plot/
+ 
+ 
